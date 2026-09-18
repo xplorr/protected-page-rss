@@ -27,8 +27,8 @@ if (!Array.isArray(targetUrls) || targetUrls.length === 0) {
   process.exit(1);
 }
 
-const BQL_ENDPOINT =
-  `https://production-sfo.browserless.io/stealth/bql?token=${encodeURIComponent(BROWSERLESS_TOKEN)}`;
+const UNBLOCK_ENDPOINT =
+  `https://production-sfo.browserless.io/unblock?token=${encodeURIComponent(BROWSERLESS_TOKEN)}&proxy=residential`;
 
 function escapeXml(value = "") {
   return String(value)
@@ -96,6 +96,7 @@ function extractImages(html, baseUrl) {
 
 function guessMimeType(url) {
   const lower = url.toLowerCase();
+
   if (lower.endsWith(".png")) return "image/png";
   if (lower.endsWith(".gif")) return "image/gif";
   if (lower.endsWith(".webp")) return "image/webp";
@@ -103,15 +104,18 @@ function guessMimeType(url) {
   return "image/jpeg";
 }
 
-function looksLikeChallengePage(html) {
+function looksBlocked(html) {
   const text = html.toLowerCase();
+
   return (
     text.includes("human verification") ||
-    text.includes("verify you are human") ||
     text.includes("captcha") ||
-    text.includes("cloudflare") ||
     text.includes("attention required") ||
-    text.includes("checking your browser")
+    text.includes("checking your browser") ||
+    text.includes("cloudflare") ||
+    text.includes("403 error") ||
+    text.includes("request blocked") ||
+    text.includes("the request could not be satisfied")
   );
 }
 
@@ -146,7 +150,16 @@ function buildFeedXml({ title, description, pageUrl, images, buildDate }) {
 `;
 }
 
-function buildIndexHtml({ title, pageUrl, images, buildDate, feedFileName, note }) {
+function buildIndexHtml({
+  title,
+  pageUrl,
+  images,
+  buildDate,
+  feedFileName,
+  resultFileName,
+  debugFileName,
+  note
+}) {
   const imageLinks = images
     .map((img) => `<li><a href="${img}">${img}</a></li>`)
     .join("\n");
@@ -161,6 +174,8 @@ function buildIndexHtml({ title, pageUrl, images, buildDate, feedFileName, note 
   <h1>${title}</h1>
   <p>Original page: <a href="${pageUrl}">${pageUrl}</a></p>
   <p>RSS feed: <a href="./${feedFileName}">${feedFileName}</a></p>
+  <p>Debug HTML: <a href="./${debugFileName}">${debugFileName}</a></p>
+  <p>Raw JSON result: <a href="./${resultFileName}">${resultFileName}</a></p>
   <p>Generated on ${buildDate}</p>
   ${note ? `<p><strong>${note}</strong></p>` : ""}
   <h2>Images found</h2>
@@ -180,7 +195,8 @@ function buildLandingPage(entries, buildDate) {
       Source: <a href="${entry.pageUrl}">${entry.pageUrl}</a><br />
       Feed: <a href="./${entry.feedFileName}">${entry.feedFileName}</a><br />
       Page: <a href="./${entry.indexFileName}">${entry.indexFileName}</a><br />
-      Debug HTML: <a href="./${entry.debugFileName}">${entry.debugFileName}</a>
+      Debug HTML: <a href="./${entry.debugFileName}">${entry.debugFileName}</a><br />
+      Raw JSON: <a href="./${entry.resultFileName}">${entry.resultFileName}</a>
     </li>`
     )
     .join("\n");
@@ -201,55 +217,35 @@ function buildLandingPage(entries, buildDate) {
 </html>`;
 }
 
-async function fetchSolvedHtml(targetUrl) {
-  const query = `
-    mutation FetchPage($url: String!) {
-      goto(url: $url) {
-        status
-      }
-      solve {
-        found
-        solved
-        time
-      }
-      html(selector: "html") {
-        html
-      }
-    }
-  `;
-
-  const response = await fetch(BQL_ENDPOINT, {
+async function fetchUnblocked(targetUrl) {
+  const response = await fetch(UNBLOCK_ENDPOINT, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      query,
-      variables: {
-        url: targetUrl
-      }
+      url: targetUrl,
+      content: true,
+      cookies: true,
+      screenshot: false,
+      browserWSEndpoint: false
     })
   });
 
-  if (!response.ok) {
-    throw new Error(`BrowserQL request failed with status ${response.status}`);
+  const rawText = await response.text();
+
+  let data;
+  try {
+    data = JSON.parse(rawText);
+  } catch {
+    throw new Error(`Unblock returned non-JSON response with status ${response.status}`);
   }
 
-  const payload = await response.json();
-
-  if (payload.errors?.length) {
-    throw new Error(payload.errors.map((e) => e.message).join("; "));
-  }
-
-  const html = payload?.data?.html?.html || "";
-  const solve = payload?.data?.solve || null;
-  const status = payload?.data?.goto?.status || null;
-
-  if (!html) {
-    throw new Error("BrowserQL returned no HTML");
-  }
-
-  return { html, solve, status };
+  return {
+    status: response.status,
+    data,
+    rawText
+  };
 }
 
 async function main() {
@@ -265,25 +261,39 @@ async function main() {
     const feedFileName = `feed${number}.xml`;
     const indexFileName = `index${number}.html`;
     const debugFileName = `debug${number}.html`;
+    const resultFileName = `result${number}.json`;
 
     console.log(`Processing URL #${number}...`);
 
-    const { html, solve, status } = await fetchSolvedHtml(targetUrl);
+    const { status, data } = await fetchUnblocked(targetUrl);
 
-    await fs.writeFile(`public/${debugFileName}`, html, "utf8");
+    await fs.writeFile(
+      `public/${resultFileName}`,
+      JSON.stringify(data, null, 2),
+      "utf8"
+    );
 
-    const title = extractTitle(html);
-    const description = extractDescription(html);
-    const images = extractImages(html, targetUrl);
+    const html = typeof data.content === "string" ? data.content : "";
+    await fs.writeFile(`public/${debugFileName}`, html || "<!-- no content returned -->", "utf8");
 
-    let note = `HTTP status: ${status ?? "unknown"}. CAPTCHA found: ${solve?.found ?? false}. Solved: ${solve?.solved ?? false}.`;
+    const title = html ? extractTitle(html) : `Feed ${number}`;
+    const description = html ? extractDescription(html) : "No HTML content returned.";
+    const images = html ? extractImages(html, targetUrl) : [];
 
-    if (looksLikeChallengePage(html)) {
-      note += " The returned HTML still looks like a challenge page.";
+    let note = `Browserless HTTP status: ${status}.`;
+
+    if (!html) {
+      note += " No HTML content was returned in the content field.";
+    } else if (looksBlocked(html)) {
+      note += " Returned HTML still looks blocked or challenged.";
+    } else {
+      note += " Returned HTML does not look obviously blocked.";
     }
 
     if (images.length === 0) {
       note += " No images were found.";
+    } else {
+      note += ` Found ${images.length} image(s).`;
     }
 
     const feedXml = buildFeedXml({
@@ -300,6 +310,8 @@ async function main() {
       images,
       buildDate,
       feedFileName,
+      resultFileName,
+      debugFileName,
       note
     });
 
@@ -311,7 +323,8 @@ async function main() {
       pageUrl: targetUrl,
       feedFileName,
       indexFileName,
-      debugFileName
+      debugFileName,
+      resultFileName
     });
   }
 
