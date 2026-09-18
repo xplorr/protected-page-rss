@@ -27,8 +27,8 @@ if (!Array.isArray(targetUrls) || targetUrls.length === 0) {
   process.exit(1);
 }
 
-const browserlessUrl =
-  `https://production-sfo.browserless.io/unblock?token=${encodeURIComponent(BROWSERLESS_TOKEN)}&proxy=residential`;
+const BQL_ENDPOINT =
+  `https://production-sfo.browserless.io/stealth/bql?token=${encodeURIComponent(BROWSERLESS_TOKEN)}`;
 
 function escapeXml(value = "") {
   return String(value)
@@ -96,12 +96,23 @@ function extractImages(html, baseUrl) {
 
 function guessMimeType(url) {
   const lower = url.toLowerCase();
-
   if (lower.endsWith(".png")) return "image/png";
   if (lower.endsWith(".gif")) return "image/gif";
   if (lower.endsWith(".webp")) return "image/webp";
   if (lower.endsWith(".svg")) return "image/svg+xml";
   return "image/jpeg";
+}
+
+function looksLikeChallengePage(html) {
+  const text = html.toLowerCase();
+  return (
+    text.includes("human verification") ||
+    text.includes("verify you are human") ||
+    text.includes("captcha") ||
+    text.includes("cloudflare") ||
+    text.includes("attention required") ||
+    text.includes("checking your browser")
+  );
 }
 
 function buildFeedXml({ title, description, pageUrl, images, buildDate }) {
@@ -135,7 +146,7 @@ function buildFeedXml({ title, description, pageUrl, images, buildDate }) {
 `;
 }
 
-function buildIndexHtml({ title, pageUrl, images, buildDate, feedFileName }) {
+function buildIndexHtml({ title, pageUrl, images, buildDate, feedFileName, note }) {
   const imageLinks = images
     .map((img) => `<li><a href="${img}">${img}</a></li>`)
     .join("\n");
@@ -151,6 +162,7 @@ function buildIndexHtml({ title, pageUrl, images, buildDate, feedFileName }) {
   <p>Original page: <a href="${pageUrl}">${pageUrl}</a></p>
   <p>RSS feed: <a href="./${feedFileName}">${feedFileName}</a></p>
   <p>Generated on ${buildDate}</p>
+  ${note ? `<p><strong>${note}</strong></p>` : ""}
   <h2>Images found</h2>
   <ul>
     ${imageLinks}
@@ -167,7 +179,8 @@ function buildLandingPage(entries, buildDate) {
       <strong>${entry.title}</strong><br />
       Source: <a href="${entry.pageUrl}">${entry.pageUrl}</a><br />
       Feed: <a href="./${entry.feedFileName}">${entry.feedFileName}</a><br />
-      Page: <a href="./${entry.indexFileName}">${entry.indexFileName}</a>
+      Page: <a href="./${entry.indexFileName}">${entry.indexFileName}</a><br />
+      Debug HTML: <a href="./${entry.debugFileName}">${entry.debugFileName}</a>
     </li>`
     )
     .join("\n");
@@ -189,31 +202,54 @@ function buildLandingPage(entries, buildDate) {
 }
 
 async function fetchSolvedHtml(targetUrl) {
-  const response = await fetch(browserlessUrl, {
+  const query = `
+    mutation FetchPage($url: String!) {
+      goto(url: $url) {
+        status
+      }
+      solve {
+        found
+        solved
+        time
+      }
+      html(selector: "html") {
+        html
+      }
+    }
+  `;
+
+  const response = await fetch(BQL_ENDPOINT, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      url: targetUrl,
-      content: true,
-      cookies: false,
-      screenshot: false,
-      browserWSEndpoint: false
+      query,
+      variables: {
+        url: targetUrl
+      }
     })
   });
 
   if (!response.ok) {
-    throw new Error(`Browserless request failed with status ${response.status}`);
+    throw new Error(`BrowserQL request failed with status ${response.status}`);
   }
 
-  const data = await response.json();
+  const payload = await response.json();
 
-  if (!data.content || typeof data.content !== "string") {
-    throw new Error("Browserless returned no HTML content");
+  if (payload.errors?.length) {
+    throw new Error(payload.errors.map((e) => e.message).join("; "));
   }
 
-  return data.content;
+  const html = payload?.data?.html?.html || "";
+  const solve = payload?.data?.solve || null;
+  const status = payload?.data?.goto?.status || null;
+
+  if (!html) {
+    throw new Error("BrowserQL returned no HTML");
+  }
+
+  return { html, solve, status };
 }
 
 async function main() {
@@ -228,16 +264,26 @@ async function main() {
     const number = i + 1;
     const feedFileName = `feed${number}.xml`;
     const indexFileName = `index${number}.html`;
+    const debugFileName = `debug${number}.html`;
 
     console.log(`Processing URL #${number}...`);
 
-    const html = await fetchSolvedHtml(targetUrl);
+    const { html, solve, status } = await fetchSolvedHtml(targetUrl);
+
+    await fs.writeFile(`public/${debugFileName}`, html, "utf8");
+
     const title = extractTitle(html);
     const description = extractDescription(html);
     const images = extractImages(html, targetUrl);
 
+    let note = `HTTP status: ${status ?? "unknown"}. CAPTCHA found: ${solve?.found ?? false}. Solved: ${solve?.solved ?? false}.`;
+
+    if (looksLikeChallengePage(html)) {
+      note += " The returned HTML still looks like a challenge page.";
+    }
+
     if (images.length === 0) {
-      console.warn(`No images found for URL #${number}`);
+      note += " No images were found.";
     }
 
     const feedXml = buildFeedXml({
@@ -253,7 +299,8 @@ async function main() {
       pageUrl: targetUrl,
       images,
       buildDate,
-      feedFileName
+      feedFileName,
+      note
     });
 
     await fs.writeFile(`public/${feedFileName}`, feedXml, "utf8");
@@ -263,7 +310,8 @@ async function main() {
       title,
       pageUrl: targetUrl,
       feedFileName,
-      indexFileName
+      indexFileName,
+      debugFileName
     });
   }
 
