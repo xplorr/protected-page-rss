@@ -1,4 +1,5 @@
 import fs from "fs/promises";
+import { chromium } from "playwright-core";
 
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const TARGET_URLS_JSON = process.env.TARGET_URLS_JSON;
@@ -26,9 +27,6 @@ if (!Array.isArray(targetUrls) || targetUrls.length === 0) {
   console.error("TARGET_URLS_JSON must be a non-empty JSON array of URLs");
   process.exit(1);
 }
-
-const UNBLOCK_ENDPOINT =
-  `https://production-sfo.browserless.io/unblock?token=${encodeURIComponent(BROWSERLESS_TOKEN)}&proxy=residential`;
 
 function escapeXml(value = "") {
   return String(value)
@@ -96,7 +94,6 @@ function extractImages(html, baseUrl) {
 
 function guessMimeType(url) {
   const lower = url.toLowerCase();
-
   if (lower.endsWith(".png")) return "image/png";
   if (lower.endsWith(".gif")) return "image/gif";
   if (lower.endsWith(".webp")) return "image/webp";
@@ -106,14 +103,10 @@ function guessMimeType(url) {
 
 function looksBlocked(html) {
   const text = html.toLowerCase();
-
   return (
     text.includes("human verification") ||
+    text.includes("let's confirm you are human") ||
     text.includes("captcha") ||
-    text.includes("attention required") ||
-    text.includes("checking your browser") ||
-    text.includes("cloudflare") ||
-    text.includes("403 error") ||
     text.includes("request blocked") ||
     text.includes("the request could not be satisfied")
   );
@@ -156,7 +149,6 @@ function buildIndexHtml({
   images,
   buildDate,
   feedFileName,
-  resultFileName,
   debugFileName,
   note
 }) {
@@ -175,7 +167,6 @@ function buildIndexHtml({
   <p>Original page: <a href="${pageUrl}">${pageUrl}</a></p>
   <p>RSS feed: <a href="./${feedFileName}">${feedFileName}</a></p>
   <p>Debug HTML: <a href="./${debugFileName}">${debugFileName}</a></p>
-  <p>Raw JSON result: <a href="./${resultFileName}">${resultFileName}</a></p>
   <p>Generated on ${buildDate}</p>
   ${note ? `<p><strong>${note}</strong></p>` : ""}
   <h2>Images found</h2>
@@ -195,8 +186,7 @@ function buildLandingPage(entries, buildDate) {
       Source: <a href="${entry.pageUrl}">${entry.pageUrl}</a><br />
       Feed: <a href="./${entry.feedFileName}">${entry.feedFileName}</a><br />
       Page: <a href="./${entry.indexFileName}">${entry.indexFileName}</a><br />
-      Debug HTML: <a href="./${entry.debugFileName}">${entry.debugFileName}</a><br />
-      Raw JSON: <a href="./${entry.resultFileName}">${entry.resultFileName}</a>
+      Debug HTML: <a href="./${entry.debugFileName}">${entry.debugFileName}</a>
     </li>`
     )
     .join("\n");
@@ -217,35 +207,42 @@ function buildLandingPage(entries, buildDate) {
 </html>`;
 }
 
-async function fetchUnblocked(targetUrl) {
-  const response = await fetch(UNBLOCK_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      url: targetUrl,
-      content: true,
-      cookies: true,
-      screenshot: false,
-      browserWSEndpoint: false
-    })
-  });
+async function fetchSolvedHtml(targetUrl) {
+  const wsEndpoint =
+    `wss://production-sfo.browserless.io/stealth?token=${encodeURIComponent(BROWSERLESS_TOKEN)}&proxy=residential&solveCaptchas=true&timeout=300000`;
 
-  const rawText = await response.text();
+  const browser = await chromium.connectOverCDP(wsEndpoint);
 
-  let data;
   try {
-    data = JSON.parse(rawText);
-  } catch {
-    throw new Error(`Unblock returned non-JSON response with status ${response.status}`);
-  }
+    const context = browser.contexts()[0];
+    const page = context.pages()[0];
+    const cdp = await page.context().newCDPSession(page);
 
-  return {
-    status: response.status,
-    data,
-    rawText
-  };
+    const captchaSolved = new Promise((resolve) => {
+      cdp.on("Browserless.captchaAutoSolved", resolve);
+    });
+
+    await page.goto(targetUrl, { waitUntil: "networkidle" });
+
+    await Promise.race([
+      captchaSolved,
+      new Promise((resolve) => setTimeout(resolve, 30000))
+    ]);
+
+    await page.waitForLoadState("networkidle");
+
+    const html = await page.content();
+    const finalUrl = page.url();
+    const title = await page.title();
+
+    return {
+      html,
+      finalUrl,
+      title
+    };
+  } finally {
+    await browser.close();
+  }
 }
 
 async function main() {
@@ -261,31 +258,21 @@ async function main() {
     const feedFileName = `feed${number}.xml`;
     const indexFileName = `index${number}.html`;
     const debugFileName = `debug${number}.html`;
-    const resultFileName = `result${number}.json`;
 
     console.log(`Processing URL #${number}...`);
 
-    const { status, data } = await fetchUnblocked(targetUrl);
+    const { html, finalUrl, title: browserTitle } = await fetchSolvedHtml(targetUrl);
 
-    await fs.writeFile(
-      `public/${resultFileName}`,
-      JSON.stringify(data, null, 2),
-      "utf8"
-    );
+    await fs.writeFile(`public/${debugFileName}`, html, "utf8");
 
-    const html = typeof data.content === "string" ? data.content : "";
-    await fs.writeFile(`public/${debugFileName}`, html || "<!-- no content returned -->", "utf8");
+    const title = extractTitle(html) || browserTitle || `Feed ${number}`;
+    const description = extractDescription(html);
+    const images = extractImages(html, finalUrl || targetUrl);
 
-    const title = html ? extractTitle(html) : `Feed ${number}`;
-    const description = html ? extractDescription(html) : "No HTML content returned.";
-    const images = html ? extractImages(html, targetUrl) : [];
+    let note = `Final URL: ${finalUrl}.`;
 
-    let note = `Browserless HTTP status: ${status}.`;
-
-    if (!html) {
-      note += " No HTML content was returned in the content field.";
-    } else if (looksBlocked(html)) {
-      note += " Returned HTML still looks blocked or challenged.";
+    if (looksBlocked(html)) {
+      note += " Returned HTML still looks blocked.";
     } else {
       note += " Returned HTML does not look obviously blocked.";
     }
@@ -299,18 +286,17 @@ async function main() {
     const feedXml = buildFeedXml({
       title,
       description,
-      pageUrl: targetUrl,
+      pageUrl: finalUrl || targetUrl,
       images,
       buildDate
     });
 
     const indexHtml = buildIndexHtml({
       title,
-      pageUrl: targetUrl,
+      pageUrl: finalUrl || targetUrl,
       images,
       buildDate,
       feedFileName,
-      resultFileName,
       debugFileName,
       note
     });
@@ -320,11 +306,10 @@ async function main() {
 
     landingEntries.push({
       title,
-      pageUrl: targetUrl,
+      pageUrl: finalUrl || targetUrl,
       feedFileName,
       indexFileName,
-      debugFileName,
-      resultFileName
+      debugFileName
     });
   }
 
