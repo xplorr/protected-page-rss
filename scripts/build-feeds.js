@@ -209,7 +209,8 @@ function buildLandingPage(entries, buildDate) {
 
 async function fetchSolvedHtml(targetUrl) {
   const wsEndpoint =
-    `wss://production-sfo.browserless.io/stealth?token=${encodeURIComponent(BROWSERLESS_TOKEN)}&proxy=residential&solveCaptchas=true&timeout=300000`;
+    // `wss://production-sfo.browserless.io/stealth?token=${encodeURIComponent(BROWSERLESS_TOKEN)}&proxy=residential&solveCaptchas=true&timeout=300000`;
+    `wss://production-sfo.browserless.io/stealth?token=${encodeURIComponent(BROWSERLESS_TOKEN)}&solveCaptchas=true&timeout=120000`;
 
   const browser = await chromium.connectOverCDP(wsEndpoint);
 
