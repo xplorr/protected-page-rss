@@ -5,5 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/build-feeds.js"
+  },
+  "dependencies": {
+    "playwright-core": "^1.55.0"
   }
 }
