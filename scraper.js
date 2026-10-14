@@ -1,7 +1,7 @@
-const fs = require('fs');
-const axios = require('axios');
+import fs from 'node:fs/promises';
+import axios from 'axios';
 
-// Vul hier je API key in van bijvoorbeeld ZenRows, ScrapingBee of WebScrapingAPI
+// Vul hier je API key in van bijv. ZenRows, ScrapingBee of WebScrapingAPI
 const API_KEY = process.env.SCRAPER_API_KEY;
 
 // Lijst van URL's die je wilt scrapen
@@ -23,7 +23,7 @@ async function fetchAndSavePages() {
             const response = await axios.get(apiUrl, { responseType: 'text' });
 
             // Sla de opgehaalde pure HTML op
-            fs.writeFileSync(fileName, response.data, 'utf-8');
+            await fs.writeFile(fileName, response.data, 'utf-8');
             console.log(`Succesvol opgeslagen als: ${fileName}`);
 
         } catch (error) {
