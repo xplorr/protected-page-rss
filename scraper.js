@@ -1,10 +1,13 @@
 import fs from 'node:fs/promises';
 import axios from 'axios';
 
-// Vul hier je API key in van bijv. ZenRows, ScrapingBee of WebScrapingAPI
 const API_KEY = process.env.SCRAPER_API_KEY;
 
-// Lijst van URL's die je wilt scrapen
+if (!API_KEY) {
+    console.error("FOUT: SCRAPER_API_KEY omgevingsvariabele ontbreekt!");
+    process.exit(1);
+}
+
 const urls = [
     'https://trends.knack.be/nieuws/macro-economie-beleid/de-cartoon-van-de-week-van-karl/'
 ];
@@ -14,22 +17,30 @@ async function fetchAndSavePages() {
         const targetUrl = encodeURIComponent(urls[i]);
         const fileName = `page${i + 1}.html`;
 
-        // js_render=true zorgt ervoor dat de JavaScript-challenge/WAF wordt uitgevoerd
-        const apiUrl = `https://api.zenrows.com/v1/?apikey=${API_KEY}&url=${targetUrl}&mode=auto`;
+        const apiUrl = `https://api.zenrows.com/v1/?apikey=${API_KEY}&url=${targetUrl}&js_render=true`;
 
         try {
-            console.log(`Ophalen van [${i + 1}/${urls.length}]: ${urls[i]}...`);
+            console.log(`Ophalen [${i + 1}/${urls.length}]: ${urls[i]}... (dit kan enkele minuten duren)`);
             
-            const response = await axios.get(apiUrl, { responseType: 'text' });
+            // Timeout ingesteld op 300 seconden (5 minuten)
+            const response = await axios.get(apiUrl, { 
+                responseType: 'text',
+                timeout: 300000 
+            });
 
-            // Sla de opgehaalde pure HTML op
             await fs.writeFile(fileName, response.data, 'utf-8');
             console.log(`Succesvol opgeslagen als: ${fileName}`);
 
         } catch (error) {
-            console.error(`Fout bij ophalen van ${urls[i]}:`, error.message);
+            if (error.code === 'ECONNABORTED') {
+                console.error(`Timeout! Het verzoek duurde langer dan 5 minuten voor: ${urls[i]}`);
+            } else if (error.response) {
+                console.error(`Fout (${error.response.status}):`, error.response.data);
+            } else {
+                console.error(`Fout bij ophalen van ${urls[i]}:`, error.message);
+            }
         }
     }
 }
 
-fetchAndSavePages();
+fetchAndSavePages();    
