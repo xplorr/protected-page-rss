@@ -2,12 +2,14 @@ name: Scrape Pages Daily
 
 on:
   schedule:
-    - cron: '0 6 * * *' # Draait dagelijks om 06:00 UTC
-  workflow_dispatch: # Maakt handmatig starten mogelijk
+    - cron: '0 6 * * *'
+  workflow_dispatch:
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # Verhoogt de maximale totale duur van de job naar 15 minuten
+
     steps:
       - name: Code uitchecken
         uses: actions/checkout@v4
@@ -24,9 +26,3 @@ jobs:
         env:
           SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
         run: node scraper.js
-
-      - name: Sla HTML bestanden op als Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: scraped-html-pages
-          path: page*.html
