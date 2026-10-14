@@ -15,7 +15,7 @@ async function fetchAndSavePages() {
         const fileName = `page${i + 1}.html`;
 
         // js_render=true zorgt ervoor dat de JavaScript-challenge/WAF wordt uitgevoerd
-        const apiUrl = `https://api.zenrows.com/v1/?key=${API_KEY}&url=${targetUrl}&js_render=true`;
+        const apiUrl = `https://api.zenrows.com/v1/?apikey=${API_KEY}&url=${targetUrl}&mode=auto`;
 
         try {
             console.log(`Ophalen van [${i + 1}/${urls.length}]: ${urls[i]}...`);
