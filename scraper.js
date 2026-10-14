@@ -9,7 +9,7 @@ if (!API_KEY) {
 }
 
 const urls = [
-    'https://trends.knack.be/nieuws/macro-economie-beleid/de-cartoon-van-de-week-van-karl/'
+    'https://trends.knack.be/nieuws/macro-economie-beleid/de-cartoon-van-de-week-van-karl'
 ];
 
 async function fetchAndSavePages() {
@@ -17,7 +17,7 @@ async function fetchAndSavePages() {
         const targetUrl = encodeURIComponent(urls[i]);
         const fileName = `page${i + 1}.html`;
 
-        const apiUrl = `https://api.zenrows.com/v1/?apikey=${API_KEY}&url=${targetUrl}&js_render=true`;
+        const apiUrl = `https://api.zenrows.com/v1/?apikey=${API_KEY}&url=${targetUrl}&mode=auto`;
 
         try {
             console.log(`Ophalen [${i + 1}/${urls.length}]: ${urls[i]}... (dit kan enkele minuten duren)`);
