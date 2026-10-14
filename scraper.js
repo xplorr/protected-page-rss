@@ -17,7 +17,7 @@ async function fetchAndSavePages() {
         const targetUrl = encodeURIComponent(urls[i]);
         const fileName = `page${i + 1}.html`;
 
-        const apiUrl = `https://api.zenrows.com/v1/?apikey=${API_KEY}&url=${targetUrl}&js_render=true&premium_proxy=true`;
+        const apiUrl = `https://api.zenrows.com/v1/?apikey=${API_KEY}&url=${targetUrl}&js_render=true&premium_proxy=true&wait=30000`;
 
         try {
             console.log(`Ophalen [${i + 1}/${urls.length}]: ${urls[i]}... (dit kan enkele minuten duren)`);
