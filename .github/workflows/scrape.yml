@@ -1,0 +1,32 @@
+name: Scrape Pages Daily
+
+on:
+  schedule:
+    - cron: '0 6 * * *' # Draait dagelijks om 06:00 UTC
+  workflow_dispatch: # Maakt handmatig starten mogelijk
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Code uitchecken
+        uses: actions/checkout@v4
+
+      - name: Node.js instellen
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Afhankelijkheden installeren
+        run: npm install axios
+
+      - name: Scraper uitvoeren
+        env:
+          SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
+        run: node scraper.js
+
+      - name: Sla HTML bestanden op als Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scraped-html-pages
+          path: page*.html
