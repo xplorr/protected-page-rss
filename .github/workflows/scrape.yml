@@ -26,3 +26,12 @@ jobs:
         env:
           SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
         run: node scraper.js
+      
+      - name: Commit en push gegenereerde HTML
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add page*.html
+          git commit -m "Update scraped HTML pages" || exit 0
+          git push
+        
