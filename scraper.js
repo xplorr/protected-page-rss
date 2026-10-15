@@ -2,15 +2,26 @@ import fs from 'node:fs/promises';
 import axios from 'axios';
 
 const API_KEY = process.env.SCRAPER_API_KEY;
+const TARGET_URLS_ENV = process.env.TARGET_URLS_JSON;
 
 if (!API_KEY) {
     console.error("FOUT: SCRAPER_API_KEY omgevingsvariabele ontbreekt!");
     process.exit(1);
 }
 
-const urls = [
-    'https://trends.knack.be/nieuws/macro-economie-beleid/de-cartoon-van-de-week-van-karl'
-];
+if (!TARGET_URLS_ENV) {
+    console.error("FOUT: TARGET_URLS_JSON omgevingsvariabele ontbreekt!");
+    process.exit(1);
+}
+
+// Zet de JSON string uit de omgevingsvariabele om naar een array
+let urls = [];
+try {
+    urls = JSON.parse(TARGET_URLS_ENV);
+} catch (error) {
+    console.error("FOUT: TARGET_URLS bevat geen geldige JSON array! Controleer de secret op GitHub.");
+    process.exit(1);
+}
 
 async function fetchAndSavePages() {
     for (let i = 0; i < urls.length; i++) {
