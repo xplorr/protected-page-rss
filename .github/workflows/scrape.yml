@@ -25,7 +25,7 @@ jobs:
       - name: Scraper uitvoeren
         env:
           SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
-          TARGET_URLS: ${{ secrets.TARGET_URLS_JSON }}
+          TARGET_URLS_JSON: ${{ secrets.TARGET_URLS_JSON }}
         run: node scraper.js
         
       - name: Commit en push gegenereerde HTML
